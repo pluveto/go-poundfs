@@ -39,7 +39,7 @@ func TestMakefs(t *testing.T) {
 		t.Error("rec is nil")
 		return
 	}
-	ndatablock := uint64(4096 / BlockSize)
+	ndatablock := uint64(8192 / BlockSize)
 	// 创建 inode
 	inoblk := rec.StartBlock
 	defer func() {

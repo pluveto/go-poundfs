@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -169,4 +170,13 @@ func accessMaskToStr(mask uint32) string {
 		str += "X"
 	}
 	return str
+}
+
+func PreviewBuffer(buf []byte, length int) string {
+	if len(buf) < length {
+		length = len(buf)
+	}
+	str := string(buf[:length])
+	strHex := hex.EncodeToString(buf[:length])
+	return fmt.Sprintf("%s(%s)", str, strHex)
 }

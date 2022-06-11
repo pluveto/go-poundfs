@@ -7,7 +7,6 @@ fh: 文件把手，俗称文件描述符
 package main
 
 import (
-	"encoding/hex"
 	"fmt"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -79,7 +78,7 @@ func (c *PoundFS) internalLookup(cancel <-chan struct{}, out *fuse.Attr, parent 
 // Lookup 根据文件名查找文件
 func (fs *PoundFS) Lookup(cancel <-chan struct{}, header *fuse.InHeader, name string, out *fuse.EntryOut) (code fuse.Status) {
 	logrus.Infof("[in ] op=%s, ino=%v, name=%s", "Lookup", header.NodeId, name)
-	parent := fs.GetInode(header.NodeId)
+	parent := fs.getInode(header.NodeId)
 	if !parent.IsDir() {
 		logrus.Errorf("Lookup %q called on non-Directory node %d", name, header.NodeId)
 		return fuse.ENOTDIR
@@ -117,13 +116,14 @@ func (fs *PoundFS) Lookup(cancel <-chan struct{}, header *fuse.InHeader, name st
 	return fuse.OK
 }
 
-// 
+// Forget 用于网络文件系统，回收一个 inode
 func (fs *PoundFS) Forget(nodeID, nlookup uint64) {
 	logrus.Infof("[in ] op=%s, node=%v, nlookup=%v", "Forget", nodeID, nlookup)
 	logrus.Debugf("[out] op=%s", "Forget")
 }
 
-func (fs *PoundFS) GetInode(ino uint64) *InoContext {
+// getInode 根据 ino 获取 inode 对象
+func (fs *PoundFS) getInode(ino uint64) *InoContext {
 	if ino == RootIno {
 		// 将 inode 1 转换为真实 根节点 inode
 		ino = uint64(fs.mp.AgCtx[0].Agi.Meta.Root)
@@ -133,9 +133,10 @@ func (fs *PoundFS) GetInode(ino uint64) *InoContext {
 	return inodeCtx
 }
 
+// GetAttr 获取文件属性
 func (fs *PoundFS) GetAttr(cancel <-chan struct{}, input *fuse.GetAttrIn, out *fuse.AttrOut) (code fuse.Status) {
 	logrus.Infof("[in ] op=%s, ino=%v", "GetAttr", input.NodeId)
-	inodeCtx := fs.GetInode(input.NodeId)
+	inodeCtx := fs.getInode(input.NodeId)
 	inode := inodeCtx.coreCache
 
 	if inode.Nlink == 0 {
@@ -162,6 +163,7 @@ func (fs *PoundFS) GetAttr(cancel <-chan struct{}, input *fuse.GetAttrIn, out *f
 	return fuse.OK
 }
 
+// Open 以指定模式打开文件（返回文件句柄）
 func (fs *PoundFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.OpenOut) (status fuse.Status) {
 	logrus.Infof("[in ] op=%s, ino=%v, flags=%v, mode=%v", "Open",
 		input.NodeId, DecodeFlags(input.Flags), DecodeFlags(input.Mode))
@@ -173,10 +175,11 @@ func (fs *PoundFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.Op
 }
 
 // https://github.com/libfuse/libfuse/issues/342
+// SetAttr 设置文件属性
 func (fs *PoundFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fuse.AttrOut) (code fuse.Status) {
 	logrus.Infof("[in ] op=%s, ino=%v, valid=%v", "SetAttr", input.NodeId, input.Valid)
 
-	inodeCtx := fs.GetInode(input.NodeId)
+	inodeCtx := fs.getInode(input.NodeId)
 	inode := inodeCtx.coreCache
 	if input.Valid&fuse.FATTR_MODE != 0 {
 		inode.Mode = uint16(input.Mode)
@@ -231,12 +234,12 @@ func (fs *PoundFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *f
 		logrus.Errorf("SetAttr failed: %v", err)
 		return fuse.EIO
 	}
-	out.Attr = ConvertAttr(inodeCtx)
+	out.Attr = convertAttr(inodeCtx)
 	logrus.Infof("[out] op=%s", "SetAttr")
 	return fuse.OK
 }
 
-func ConvertAttr(inodeCtx *InoContext) fuse.Attr {
+func convertAttr(inodeCtx *InoContext) fuse.Attr {
 	inode := inodeCtx.coreCache
 	return fuse.Attr{
 		Ino:       inode.Ino,
@@ -264,9 +267,10 @@ func (fs *PoundFS) Readlink(cancel <-chan struct{}, header *fuse.InHeader) (out 
 	return nil, fuse.ENOSYS
 }
 
+// Mknod 创建文件（另一种方式）
 func (fs *PoundFS) Mknod(cancel <-chan struct{}, input *fuse.MknodIn, name string, out *fuse.EntryOut) (code fuse.Status) {
 	logrus.Infof("[in ] op=%s, name=%s, parent_ino=%v, mode=%v, flags=nil", "Mknod", name, input.NodeId, input.Mode)
-	parentInodeCtx := fs.GetInode(input.NodeId)
+	parentInodeCtx := fs.getInode(input.NodeId)
 	parentInodeCtx.LoadInode()
 	newBlk, err := fs.mp.AllocBlock(0, 5)
 	if err != nil {
@@ -318,17 +322,18 @@ func (fs *PoundFS) Mknod(cancel <-chan struct{}, input *fuse.MknodIn, name strin
 	return fuse.OK
 }
 
+// Mkdir 根据名称在 inode 下创建目录
 func (fs *PoundFS) Mkdir(cancel <-chan struct{}, input *fuse.MkdirIn, name string, out *fuse.EntryOut) (code fuse.Status) {
 	logrus.Infof("[in ] op=%s, ino=%v, name=%v", "Mkdir", input.NodeId, name)
-	parentInodeCtx := fs.GetInode(input.NodeId)	
-	
-	newBlk, err := fs.mp.AllocBlock(0, 5)
+	parentInodeCtx := fs.getInode(input.NodeId)
+
+	newBlk, err := fs.mp.AllocBlock(0, 1)
 	if err != nil {
 		logrus.Errorf("Mkdir failed: %v", err)
 		return fuse.EIO
 	}
 	newDirInodeCtx := NewInoContext(fs.dev, newBlk)
-	err = newDirInodeCtx.InitInode(uint16(fuse.S_IFDIR|input.Mode))
+	err = newDirInodeCtx.InitInode(uint16(fuse.S_IFDIR | input.Mode))
 	if err != nil {
 		logrus.Errorf("Mkdir failed: %v", err)
 		return fuse.EIO
@@ -358,7 +363,7 @@ func (fs *PoundFS) Mkdir(cancel <-chan struct{}, input *fuse.MkdirIn, name strin
 	}
 	parentInodeCtx.SyncInode()
 
-	out.Attr = ConvertAttr(newDirInodeCtx)
+	out.Attr = convertAttr(newDirInodeCtx)
 	out.Generation = NextGen()
 	out.NodeId = inode.Ino
 
@@ -366,18 +371,19 @@ func (fs *PoundFS) Mkdir(cancel <-chan struct{}, input *fuse.MkdirIn, name strin
 	return fuse.OK
 }
 
+// Unlink 删除文件
 func (fs *PoundFS) Unlink(cancel <-chan struct{}, header *fuse.InHeader, name string) (code fuse.Status) {
 	logrus.Infof("[in ] op=%s, name=%s, ino=%v", "Unlink", name, header.NodeId)
 	logrus.Debugf("[out] op=%s", "Unlink")
 
 	// 删除条目、删除文件、回收空间
-	dirInoCtx := fs.GetInode(header.NodeId)
+	dirInoCtx := fs.getInode(header.NodeId)
 	fileIno, err := dirInoCtx.GetEntry(name)
 	if err != nil {
 		logrus.Errorf("Unlink failed when get entry by name: %v %s", err, name)
 		return fuse.EIO
 	}
-	fileInode := fs.GetInode(fileIno)
+	fileInode := fs.getInode(fileIno)
 	err = dirInoCtx.RemoveEntry(name)
 	if err != nil {
 		logrus.Errorf("Unlink failed when remove entry by name: %v", err)
@@ -398,10 +404,22 @@ func (fs *PoundFS) Unlink(cancel <-chan struct{}, header *fuse.InHeader, name st
 	return fuse.OK
 }
 
+// Rmdir 根据文件名删除目录
 func (fs *PoundFS) Rmdir(cancel <-chan struct{}, header *fuse.InHeader, name string) (code fuse.Status) {
 	logrus.Infof("[in ] op=%s, name=%s, in=%s", "Rmdir", name, JsonStringify(header))
+	out := &fuse.EntryOut{}
+	code = fs.Lookup(cancel, header, name, out)
+	if code != fuse.OK {
+		logrus.Errorf("Rmdir failed when lookup: %v", code)
+		return fuse.ENOENT
+	}
+	code = fs.Unlink(cancel, header, name)
+	if code != fuse.OK {
+		logrus.Errorf("Rmdir failed when unlink: %v", code)
+		return code
+	}
 	logrus.Debugf("[out] op=%s", "Rmdir")
-	return fuse.ENOSYS
+	return fuse.OK
 }
 
 func (fs *PoundFS) Symlink(cancel <-chan struct{}, header *fuse.InHeader, pointedTo string, linkName string, out *fuse.EntryOut) (code fuse.Status) {
@@ -415,7 +433,7 @@ func (fs *PoundFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName 
 	logrus.Infof("[in ] op=%s, old_dir_ino=%v, old_name=%s, new_dir_ino=%v, new_name=%s", "Rename", input.NodeId, oldName, input.Newdir, newName)
 	var err error
 	// 获取旧目录 inode
-	oldDirInoCtx := fs.GetInode(input.NodeId)
+	oldDirInoCtx := fs.getInode(input.NodeId)
 	err = oldDirInoCtx.LoadInode()
 	if err != nil {
 		logrus.Errorf("Rename failed when load inode of old dir: %v", err)
@@ -427,14 +445,14 @@ func (fs *PoundFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName 
 		logrus.Errorf("Rename failed when get entry by name: %v %s", err, oldName)
 		return fuse.EIO
 	}
-	fileInodeCtx := fs.GetInode(fileIno)
+	fileInodeCtx := fs.getInode(fileIno)
 	err = fileInodeCtx.LoadInode()
 	if err != nil {
 		logrus.Errorf("Rename failed when load inode: %v", err)
 		return fuse.EIO
 	}
 	// 获取新目录 inode
-	newDirInoCtx := fs.GetInode(input.Newdir)
+	newDirInoCtx := fs.getInode(input.Newdir)
 	err = newDirInoCtx.LoadInode()
 	if err != nil {
 		logrus.Errorf("Rename failed when load inode: %v", err)
@@ -479,6 +497,7 @@ func getXAttrCacheKey(ino uint64, key string) string {
 	return fmt.Sprintf("%d_%s", ino, key)
 }
 
+// GetXAttr 获取文件的扩展属性
 func (fs *PoundFS) GetXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr string, dest []byte) (size uint32, code fuse.Status) {
 	logrus.Infof("[in ] op=%s, ino=%v, attr=%s ", "GetXAttr", header.NodeId, attr)
 	logrus.Debugf("[out] op=%s", "GetXAttr")
@@ -490,6 +509,7 @@ func (fs *PoundFS) GetXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr 
 		return uint32(len(item)), fuse.OK
 	}
 }
+
 // SetXAttr 设置文件的扩展属性
 func (fs *PoundFS) SetXAttr(cancel <-chan struct{}, input *fuse.SetXAttrIn, attr string, data []byte) fuse.Status {
 	logrus.Infof("[in ] op=%s, attr=%s, value=%v", "SetXAttr", attr, data)
@@ -520,19 +540,19 @@ func (fs *PoundFS) Access(cancel <-chan struct{}, input *fuse.AccessIn) (code fu
 	return fuse.OK
 }
 
-// Create 创建文件
+// Create 根据文件名创建文件
 func (fs *PoundFS) Create(cancel <-chan struct{}, input *fuse.CreateIn,
 	name string, out *fuse.CreateOut) (code fuse.Status) {
 	logrus.Infof("[in ] op=%s, name=%s, parent_ino=%v, mode=%v, flags=%v", "Create", name, input.NodeId, StrMode(uint16(input.Mode)), DecodeFlags(input.Flags))
 
-	parentInodeCtx := fs.GetInode(input.NodeId)
+	parentInodeCtx := fs.getInode(input.NodeId)
 	parentInodeCtx.LoadInode()
-	newBlk, err := fs.mp.AllocBlock(0, 4096/BlockSize)
+	newInodeBlkno, err := fs.mp.AllocBlock(0, 8192/BlockSize)
 	if err != nil {
 		logrus.Errorf("Create failed: %v", err)
 		return fuse.EIO
 	}
-	newInodeCtx := NewInoContext(fs.dev, newBlk)
+	newInodeCtx := NewInoContext(fs.dev, newInodeBlkno)
 	err = newInodeCtx.InitInode(uint16(input.Mode))
 	if err != nil {
 		logrus.Errorf("Create failed: %v", err)
@@ -542,7 +562,7 @@ func (fs *PoundFS) Create(cancel <-chan struct{}, input *fuse.CreateIn,
 	inode.Flags = uint32(input.Flags)
 	inode.Uid = input.Uid
 	inode.Gid = input.Gid
-	inode.NLocBlk = 4096 / BlockSize
+	inode.NLocBlk = 8192 / BlockSize
 	err = newInodeCtx.SyncInode()
 	if err != nil {
 		logrus.Errorf("Create failed: %v", err)
@@ -553,7 +573,6 @@ func (fs *PoundFS) Create(cancel <-chan struct{}, input *fuse.CreateIn,
 		logrus.Errorf("Create failed: %v", err)
 		return fuse.EIO
 	}
-	err = newInodeCtx.SyncInode()
 	if err != nil {
 		logrus.Errorf("Create failed: %v", err)
 		return fuse.EIO
@@ -572,20 +591,7 @@ func (fs *PoundFS) Create(cancel <-chan struct{}, input *fuse.CreateIn,
 	out.EntryOut = fuse.EntryOut{
 		NodeId:     inode.Ino,
 		Generation: 1,
-		Attr: fuse.Attr{
-			Ino:       inode.Ino,
-			Blocks:    1,
-			Nlink:     inode.Nlink,
-			Mode:      uint32(input.Mode),
-			Owner:     fuse.Owner{Uid: inode.Uid, Gid: inode.Gid},
-			Size:      0,
-			Atime:     TimestampSecPart(inode.Atime),
-			Mtime:     TimestampSecPart(inode.Mtime),
-			Ctime:     TimestampSecPart(inode.Ctime),
-			Atimensec: TimestampNsecPart(inode.Atime),
-			Mtimensec: TimestampNsecPart(inode.Mtime),
-			Ctimensec: TimestampNsecPart(inode.Ctime),
-		},
+		Attr:       convertAttr(newInodeCtx),
 	}
 
 	out.OpenOut = fuse.OpenOut{
@@ -597,9 +603,10 @@ func (fs *PoundFS) Create(cancel <-chan struct{}, input *fuse.CreateIn,
 	return fuse.OK
 }
 
+// OpenDir 打开目录，返回一个文件句柄
 func (fs *PoundFS) OpenDir(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.OpenOut) (status fuse.Status) {
 	logrus.Infof("[in ] op=%s, ino=%v, flags=%v", "OpenDir", input.NodeId, DecodeFlags(input.Flags))
-	inodeCtx := fs.GetInode(input.NodeId)
+	inodeCtx := fs.getInode(input.NodeId)
 	if inodeCtx == nil {
 		logrus.Error("OpenDir failed: inode not found")
 		return fuse.ENOENT
@@ -611,10 +618,10 @@ func (fs *PoundFS) OpenDir(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse
 	return fuse.OK
 }
 
-// 当读文件时，会调用 Read Flush Release
+// Read 从指定偏移量读取指定长度的文件内容
 func (fs *PoundFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (fuse.ReadResult, fuse.Status) {
 	logrus.Infof("[in ] op=%s, ino=%v, off=%d", "Read", input.NodeId, input.Offset)
-	inodeCtx := fs.GetInode(input.NodeId)
+	inodeCtx := fs.getInode(input.NodeId)
 	if inodeCtx == nil {
 		return nil, fuse.ENOENT
 	}
@@ -624,15 +631,6 @@ func (fs *PoundFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) 
 	}
 	logrus.Infof("[out] op=%s, ino=%v, nbytes=%v, out=%s", "Read", inodeCtx.ino, nbytes, PreviewBuffer(buf, int(Min(nbytes, 512))))
 	return fuse.ReadResultData(buf), fuse.OK
-}
-
-func PreviewBuffer(buf []byte, length int) string {
-	if len(buf) < length {
-		length = len(buf)
-	}
-	str := string(buf[:length])
-	strHex := hex.EncodeToString(buf[:length])
-	return fmt.Sprintf("%s(%s)", str, strHex)
 }
 
 func (fs *PoundFS) GetLk(cancel <-chan struct{}, in *fuse.LkIn, out *fuse.LkOut) (code fuse.Status) {
@@ -665,6 +663,7 @@ func (fs *PoundFS) SetLkw(cancel <-chan struct{}, in *fuse.LkIn) (code fuse.Stat
 	return fuse.OK
 }
 
+// Release 释放文件句柄
 func (fs *PoundFS) Release(cancel <-chan struct{}, input *fuse.ReleaseIn) {
 	logrus.Infof("[in ] op=%s, ino=%v, fh=%v, flags=%v", "Release", input.NodeId, input.Fh, DecodeFlags(input.Flags))
 	// input.Flags
@@ -673,9 +672,10 @@ func (fs *PoundFS) Release(cancel <-chan struct{}, input *fuse.ReleaseIn) {
 	logrus.Debugf("[out] op=%s", "Release")
 }
 
+// Write 在指定偏移写入文件内容
 func (fs *PoundFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte) (written uint32, code fuse.Status) {
 	logrus.Infof("[in ] op=%s, ino=%v, data=%s, len=%d", "Write", input.NodeId, PreviewBuffer(data, int(input.Size)), input.Size)
-	inoCtx := fs.GetInode(input.NodeId)
+	inoCtx := fs.getInode(input.NodeId)
 	if inoCtx == nil {
 		logrus.Errorf("Write failed: inode ino=%v not found", input.NodeId)
 		return 0, fuse.ENOENT
@@ -689,18 +689,21 @@ func (fs *PoundFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byt
 	return uint32(nbytes), fuse.OK
 }
 
+// Flush 将 Write 刷新到磁盘
 func (fs *PoundFS) Flush(cancel <-chan struct{}, input *fuse.FlushIn) fuse.Status {
 	logrus.Infof("[in ] op=%s, ino=%v, fh=%v", "Flush", input.NodeId, input.Fh)
 	logrus.Debugf("[out] op=%s", "Flush")
 	return fuse.OK
 }
 
+// Fsync 将文件所有更改刷新到磁盘
 func (fs *PoundFS) Fsync(cancel <-chan struct{}, input *fuse.FsyncIn) (code fuse.Status) {
 	logrus.Infof("[in ] op=%s", "Fsync")
 	logrus.Debugf("[out] op=%s", "Fsync")
 	return fuse.OK
 }
 
+// ReadDir 读取目录内容
 func (fs *PoundFS) ReadDir(cancel <-chan struct{}, input *fuse.ReadIn, l *fuse.DirEntryList) fuse.Status {
 	logrus.Infof("[in ] op=%s, ino=%v, off=%d", "ReadDir", input.NodeId, input.Offset)
 	ino := input.InHeader.NodeId
@@ -752,13 +755,14 @@ op=ReadDirPlus, in={
     "Pid": 501374,
     "Fh": 0,
     "Offset": 0,
-    "Size": 4096,
+    "Size": 8192,
     "ReadFlags": 0,
     "LockOwner": 0,
     "Flags": 100352,
     "Padding": 0
 }
 */
+// ReadDirPlus 读取目录内容(但通过文件名 lookup 的方式)
 func (fs *PoundFS) ReadDirPlus(cancel <-chan struct{}, input *fuse.ReadIn, l *fuse.DirEntryList) fuse.Status {
 	logrus.Infof("op=%s, ino=%v, flags=%v, offset=%v, size=%v", "ReadDirPlus", input.NodeId, DecodeFlags(input.Flags), input.Offset, input.Size)
 	ino := input.InHeader.NodeId
@@ -813,6 +817,7 @@ func (fs *PoundFS) ReadDirPlus(cancel <-chan struct{}, input *fuse.ReadIn, l *fu
 	return fuse.OK
 }
 
+// ReleaseDir 释放目录句柄
 func (fs *PoundFS) ReleaseDir(input *fuse.ReleaseIn) {
 	logrus.Infof("[in ] op=%s, ino=%v, fh=%d flags=%v", "ReleaseDir", input.NodeId, input.Fh, DecodeFlags(input.Flags))
 	fs.openfiles.Remove(input.Fh)

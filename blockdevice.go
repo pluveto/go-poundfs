@@ -72,6 +72,7 @@ func (f *FileBlockDevice) Read(offset uint64, data []byte) error {
 	return nil
 }
 
+
 func (f *FileBlockDevice) Write(offset uint64, data []byte) error {
 	nbytes, err := f.file.WriteAt(data, int64(offset))
 	if err != nil {

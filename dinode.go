@@ -115,8 +115,12 @@ func (ctx *InoContext) InitDataBlock() error {
 	for i := 0; i < BlockSize; i++ {
 		databytes[i] = EOF
 	}
-	for i := 0; i < int(ctx.coreCache.NLocBlk); i++ {
-		err := ctx.dev.WriteBlock(ctx.ino+1+uint64(i), databytes)
+	for i := uint64(0); i < ctx.coreCache.NLocBlk; i++ {
+		phyblk, err := ctx.Bmap(i)
+		if err != nil {
+			return err
+		}
+		err = ctx.dev.WriteBlock(phyblk, databytes)
 		if err != nil {
 			return err
 		}
@@ -553,13 +557,14 @@ func (ctx *InoContext) Truncate(size uint64) error {
 	return ErrNotImplemented
 }
 func (ctx *InoContext) GetChild(name string) (*InoContext, error) {
-	childEnt, err := ctx.GetEntry(name)
+	childIno, err := ctx.GetEntry(name)
 	if err != nil {
 		return nil, err
 	}
-	childCtx := NewInoContext(ctx.dev, childEnt)
+	childCtx := NewInoContext(ctx.dev, childIno)
 	err = childCtx.LoadInode()
 	if err != nil {
+		logrus.Errorf("load inode %d (0x%x) failed: %v", childIno, childIno*BlockSize, err)
 		return nil, err
 	}
 	return childCtx, nil

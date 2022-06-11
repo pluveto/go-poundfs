@@ -25,7 +25,7 @@ func main() {
 	if len(flag.Args()) < 1 {
 		log.Fatal("Usage:\n\tpoundfs MOUNTPOINT")
 	}
-	*debug = true
+	// *debug = true
 	if *debug {
 		log.SetLevel(log.DebugLevel)
 		log.Warn("Debug mode enabled")

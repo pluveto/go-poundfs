@@ -8,13 +8,6 @@ import (
 	"github.com/go-restruct/restruct"
 )
 
-// import (
-// 	"bytes"
-// 	"encoding/binary"
-// 	"errors"
-// 	"os"
-// 	"reflect"
-// )
 
 func BytesOf(data interface{}) ([]byte, error) {
 	// 确保 data 是指针结构

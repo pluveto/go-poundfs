@@ -53,7 +53,7 @@ func loadSuperblock(dev BlockDevice) (*Superblock, error) {
 		return nil, err
 	}
 	// check magic number
-	if !CheckMagic(sbbytes, SuperBlockMagicNum) {
+	if !CheckMagic(sbbytes[:4], SuperBlockMagicNum) {
 		return nil, ErrInvalidStructBytes
 	}
 	err = StructOf(sbbytes, &sb)
@@ -63,7 +63,7 @@ func loadSuperblock(dev BlockDevice) (*Superblock, error) {
 	return &sb, nil
 }
 
-func (mp *MountPoint) AllocBlock(agno uint32, nblock uint64) (blockno uint64, err error){
+func (mp *MountPoint) AllocBlock(agno uint32, nblock uint64) (blockno uint64, err error) {
 	cntroot := mp.AgCtx[agno].Agf.Meta.CntRoot
 	btCtx := NewBtreeContext[uint64, DFreeBlockBtRec](mp.dev, uint64(cntroot))
 	rec, index, err := btCtx.GetFirstMeet(nblock)
