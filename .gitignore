@@ -1,0 +1,5 @@
+usertest/*.o
+mp
+tmp
+poundfs
+*.bin
